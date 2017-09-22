@@ -56,13 +56,12 @@ def getReviews(app_id_list, filename):
 
         for app_id in app_id_list:
             progress += 1
-            print(round((progress / len(app_id_list)), 4) * 100)
+            print(round((progress / len(app_id_list)), 4))
             for page in range(1, 11):
                 url = 'https://itunes.apple.com/kr/rss/customerreviews/id=%s/page=%d/sortby=mostrecent/json' % (app_id, page)
                 data = getJson(url).get('feed')
 
-                if data.get('entry') != None:
-
+                if data.get('entry'):
                     app_name = data.get('entry')[0]['im:name'].get('label')
 
                     for entry in data.get('entry'):
@@ -77,8 +76,10 @@ def getReviews(app_id_list, filename):
                         review = entry.get('content').get('label') if entry.get('content') else None
                         vote_count = entry.get('im:voteCount').get('label') if entry.get('im:voteCount') else None
 
-                        csvData = [app_id, app_name.replace('\n', ' '), review_id, title.replace('\n', ' '),
-                                   author.replace('\n', ' '), author_url, version, rating, review.replace('\n', ' '), vote_count]
+                        csvData = [app_id, app_name, review_id, title, author, author_url, version, rating,
+                                   review, vote_count]
+                        for i in range(len(csvData)):
+                            csvData[i] = csvData[i].replace('\t', '').replace('\n', ' ')
 
                         for i in range(len(csvData)):
                             if csvData[i]:
