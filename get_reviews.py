@@ -1,7 +1,6 @@
 # coding with utf-8
 import urllib3
 import json
-import pandas as pd
 import time
 import sys
 
@@ -25,13 +24,12 @@ if button['doall']:
 elif button['doone']:
     pass
 elif button['doparts']:
-    numbers = '[' + str(a) + '-' + str(b) + ']'
-    filename = 'reviews' + numbers + '.txt' if b-a == 1 else 'review.txt'
+    numbers = '[' + str(a) + '-' + str(b-1) + ']'
+    filename = 'reviews' + numbers + '.txt' if b-a != 1 else 'review.txt'
 else:
     print('error')
 
 urllib3.disable_warnings()
-data = pd.read_csv('App_Store_Links.csv', header=None)
 with open('App_Store_Links.csv') as file:
     links = file.readlines()
 
@@ -40,25 +38,29 @@ for link in links:
     app_id_list.append(link.split('/id')[1].split('?mt')[0])
 
 csvTitles = ['app_id', 'app_name', 'review_id', 'title', 'author', 'author_url', 'version', 'rating', 'review', 'vote_count']
-col = len(csvTitles)
+col = len(csvTitles) - 1
 http = urllib3.PoolManager()
 
 def getJson(url, http=http):
     response = http.request('GET', url, headers={'User-Agent': 'Mozilla/5.0'})
-    time.sleep(1)
+    time.sleep(1.5)
     datas = response.data.decode('utf-8')
     return json.loads(datas)
 
 def getReviews(app_id_list, filename):
+    progress = 0
     with open('./data/' + filename, 'w', encoding='utf-8') as file:
         for i in range(len(csvTitles)):
             file.write(csvTitles[i] + '\t' if i < col else csvTitles[i])
         file.write('\n')
+
         for app_id in app_id_list:
+            progress += 1
+            print(round((progress / len(app_id_list)), 4) * 100)
             for page in range(1, 11):
                 url = 'https://itunes.apple.com/kr/rss/customerreviews/id=%s/page=%d/sortby=mostrecent/json' % (app_id, page)
                 data = getJson(url).get('feed')
-                print(app_id)
+
                 if data.get('entry') != None:
 
                     app_name = data.get('entry')[0]['im:name'].get('label')
@@ -75,8 +77,8 @@ def getReviews(app_id_list, filename):
                         review = entry.get('content').get('label') if entry.get('content') else None
                         vote_count = entry.get('im:voteCount').get('label') if entry.get('im:voteCount') else None
 
-                        csvData = [app_id, app_name, review_id, title.replace('\n', ' '), author, author_url, version,
-                                   rating, review.replace('\n', ' '), vote_count]
+                        csvData = [app_id, app_name.replace('\n', ' '), review_id, title.replace('\n', ' '),
+                                   author.replace('\n', ' '), author_url, version, rating, review.replace('\n', ' '), vote_count]
 
                         for i in range(len(csvData)):
                             if csvData[i]:
