@@ -3,9 +3,8 @@
 from data import settings
 import sys
 import pandas as pd
-import numpy as np
 import sqlalchemy
-from sqlalchemy import Column, Integer, String, Float, BigInteger
+from sqlalchemy import Column, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -36,32 +35,51 @@ class Reviews(Base):
 
 Base.metadata.create_all(engine)
 
-start = [i for i in range(1, 5913, 100)]
-end = [i for i in range(100, 5913, 100)] + [5912]
+with open('new_app_id_list.txt', 'r') as file:
+    app_ids = file.readlines()
+
+app_id_list = []
+for i in app_ids:
+    app_id_list.append(i.strip())
+
+file_len = len(app_id_list)
+
+start = [i for i in range(1, file_len, 100)]
+if file_len % 100 == 0:
+    end = [i for i in range(100, file_len+1, 100)]
+else:
+    end = [i for i in range(100, file_len, 100)] + [file_len]
 
 file_list = []
 for i,j in zip(start, end):
-    file_list.append('./data/reviews[{0}-{1}].txt'.format(i, j))
+    file_list.append('./data/n_reviews[{0}-{1}].txt'.format(i, j))
 
-if len(sys.argv) <= 2:
-    if (int(sys.argv[1]) <= 60) & (int(sys.argv[1]) > 0):
+len_file_list = len(file_list)
+
+if sys.argv[1] == 'all':
+    print('please insert 1 ~ {}'.format(len_file_list))
+elif len(sys.argv) <= 2:
+    if (int(sys.argv[1]) <= len_file_list) & (int(sys.argv[1]) > 0):
         idx = int(sys.argv[1])
         file_list = file_list[:idx]
     else:
-        print('only can write 1 ~ 60, int')
+        print('only can write 1 ~ {}, int'.format(len_file_list))
 else:
-    if (int(sys.argv[2]) <= 60) & (int(sys.argv[1]) < int(sys.argv[2])) & (int(sys.argv[1]) < 60):
+    if (int(sys.argv[2]) <= len_file_list) & (int(sys.argv[1]) < int(sys.argv[2])) & (int(sys.argv[1]) < len_file_list):
         idx1 = int(sys.argv[1])
         idx2 = int(sys.argv[2])
         file_list = file_list[idx1:idx2]
     else:
-        print('2nd number only can write 1 ~ 60, int, 1st one must be smaller than 2nd one, from 0 ~ 59')
+        print('2nd number only can write 1 ~ {0}, int, 1st one must be smaller than 2nd one, from 0 ~ {1}'.format(len_file_list, len_file_list-1))
 
 
 def add_Data(file_list):
     data_list = []
     for file_path in file_list:
-        data = pd.read_csv(file_path, sep='\t', dtype=str)
+        try:
+            data = pd.read_csv(file_path, sep='\t', dtype=str)
+        except:
+            data = pd.read_csv(file_path, sep='\t', dtype=str, encoding='utf8', engine='python')
         for i in data.index:
             data_list.append(Reviews(
                 app_id=data.loc[i, 'app_id'],

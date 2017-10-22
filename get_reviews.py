@@ -26,20 +26,23 @@ def getReviews(app_id_list, filename):
         for app_id in app_id_list:
             progress += 1
             print(round((progress / len(app_id_list)), 4), app_id)
-            for page in range(1, 11):
+            page = 1
+            doit = True
+            while doit & (page <= 10):
+            # for page in range(1, 11):
                 url = 'https://itunes.apple.com/kr/rss/customerreviews/id=%s/page=%d/sortby=mostrecent/json' % (app_id, page)
                 data = getJson(url).get('feed')
-                print(page)
-                if data.get('entry'):
+
+                if type(data.get('entry')) == list:
+                    print(page)
                     try:
                         app_name = data.get('entry')[0]['im:name'].get('label')
                         cate = data.get('entry')[0]['category'].get('attributes').get('label')
                     except:
                         app_name = data.get('entry')['im:name'].get('label')
                         cate = data.get('entry')['category'].get('attributes').get('label')
-                    for entry in data.get('entry'):
-                        if entry.get('im:name'): continue
 
+                    for entry in data.get('entry')[1:]:
                         review_id = entry.get('id').get('label') if entry.get('id') else None
                         title = entry.get('title').get('label') if entry.get('title') else None
                         author = entry.get('author').get('name').get('label') if entry.get('author') else None
@@ -52,7 +55,7 @@ def getReviews(app_id_list, filename):
                                    review, cate]
                         for i in range(len(csvData)):
                             if csvData[i]:
-                                csvData[i] = csvData[i].replace('\t', '').replace('\n', ' ')
+                                csvData[i] = csvData[i].replace('\t', '').replace('\n', ' ').replace('"', '')
                             else:
                                 csvData[i] = 'NaN'
 
@@ -62,6 +65,10 @@ def getReviews(app_id_list, filename):
                             else:
                                 file.write('NaN' + '\t' if i < col else 'NaN')
                         file.write('\n')
+
+                else:
+                    doit = False
+                page += 1
 
 button = {'doall': False, 'doparts': False, 'doone': False}
 if sys.argv[1] == 'all':
@@ -79,9 +86,19 @@ else:
     print('insert argument: -all: do all the list -two numbers: do between numbers, start with 0 ends with 1 to 162000')
 
 
-
 urllib3.disable_warnings()
-with open('App_Store_Links.csv') as file:
+# app link file: total len 4535
+with open('new_app_id_list.txt', 'r') as file:
+    app_ids = file.readlines()
+
+app_id_list = []
+for i in app_ids:
+    app_id_list.append(i.strip())
+
+"""
+# old app links
+app_id_file = 'new_app_id_list'
+with open(app_id_file) as file:
     links = file.readlines()
 
 app_id_list = []
@@ -89,6 +106,7 @@ for link in links:
     app_id_list.append(link.split('/id')[1].split('?mt')[0])
 
 app_id_list = sorted(list(set(app_id_list)))[:-4]
+"""
 
 if button['doall']:
     filename = 'reviews.txt'
@@ -97,7 +115,9 @@ elif button['doone']:
     pass
 elif button['doparts']:
     numbers = '[' + str(a+1) + '-' + str(b) + ']'
-    filename = 'reviews' + numbers + '.txt' if b-a != 1 else 'review.txt'
+    filename = 'n_reviews' + numbers + '.txt' if b-a != 1 else 'review.txt'
     getReviews(app_id_list[a:b], filename=filename)
 else:
     print('error')
+
+# 0 ~ 4535
