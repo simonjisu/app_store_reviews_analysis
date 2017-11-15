@@ -24,3 +24,4 @@ def save_as_json(data, filename):
 
 save_as_json(train_data, './data/train_json.txt')
 save_as_json(test_data, './data/test_json.txt')
+
