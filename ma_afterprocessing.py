@@ -1,8 +1,13 @@
-from utils import Make_dictionay, Post_ma, Unknown_words
+from konlpy.tag import Mecab, Komoran
+from utils import *
 
+mecab = Mecab()
 
-def After_processing(ma_docs, app_id_list):
+def space_jamo(print_util, filename):
+    train_docs, app_id_list = get_data_json('./data/train_json.txt')
+    space_model = Spacing(print_util)
+    new_train_docs = space_model.fit(train_docs)
+    save_json(filename, new_train_docs)
 
-    UNK = Unknown_words(ma_docs, app_id_list)
-    unknown_list = UNK.get_unknown_words()
-    make_dict = Make_dictionay()
+space_jamo(print_util=commandline_print, filename='./data/train_json_space_jamo')
+
