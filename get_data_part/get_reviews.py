@@ -95,19 +95,6 @@ app_id_list = []
 for i in app_ids:
     app_id_list.append(i.strip())
 
-"""
-# old app links
-app_id_file = 'new_app_id_list'
-with open(app_id_file) as file:
-    links = file.readlines()
-
-app_id_list = []
-for link in links:
-    app_id_list.append(link.split('/id')[1].split('?mt')[0])
-
-app_id_list = sorted(list(set(app_id_list)))[:-4]
-"""
-
 if button['doall']:
     filename = 'reviews.txt'
     getReviews(app_id_list, filename=filename)

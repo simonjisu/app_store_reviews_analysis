@@ -3,30 +3,28 @@
 from itertools import chain, islice
 from collections import deque, defaultdict, Counter
 from IPython.display import clear_output
-from tqdm import tqdm_notebook, tqdm
-from scipy.sparse import csr_matrix
+from tqdm import tqdm
 import mmap
 import time
 import os
 import sys
 import ujson
-import numpy as np
 
 class Post_ma(object):
-    def __init__(self, auto_load=True, tokenizer_name='komoran'):
+    def __init__(self, file_path, auto_load=True):
         """
         사용법:
         1. update를 사용해 규칙사전을 등록, 2번째 부터는 자동으로 불러오기함
         2. 규칙을 로드하면 change하면됨
         """
-        self.filename = './data/post_ma_pairs_' + tokenizer_name + '.txt'
+        self.file_path = file_path
         self.post_ma_pairs = []
         if auto_load:
-            if os.path.exists(self.filename):
+            if os.path.exists(self.file_path):
                 self.load()
                 print('Load Complete! total {} rules'.format(len(self.post_ma_pairs)))
             else:
-                print('Can not load file: {}! '.format(self.filename),
+                print('Can not load file: {}! '.format(self.file_path),
                       'There is no file, please create file by update method(take option write=True)')
 
     def __doc__(self):
@@ -37,7 +35,7 @@ class Post_ma(object):
     # update part
     def update(self, ma_pairs, write=False):
         button = 'w' if write else 'a'
-        with open(self.filename, button, encoding='utf-8') as output_file:
+        with open(self.file_path, button, encoding='utf-8') as output_file:
             output_file.write('')
             duplicated_index = []
             for ma in ma_pairs:
@@ -69,7 +67,7 @@ class Post_ma(object):
 
     # load part
     def load(self):
-        with open(self.filename, 'r', encoding='utf-8') as file:
+        with open(self.file_path, 'r', encoding='utf-8') as file:
             lines = file.readlines()
             result = []
             for line in lines:
@@ -116,8 +114,8 @@ class Post_ma(object):
         """
         앞에서 loc_dict에 key는 문자열 하나기 때문에 loc_info에는 doc_loc와 ma_loc둘다 저장됨
         """
-        for app_id, (doc_loc, ma_loc) in loc_info:
-            self.replace_list_elem(ma_docs[app_id][doc_loc], ma_loc, ma_set[1])
+        for app_loc, doc_loc, ma_loc in loc_info:
+            self.replace_list_elem(ma_docs[app_loc][doc_loc], ma_loc, ma_set[1])
 
     def merge_method(self, ma_docs, ma_set, loc_info):
         """
@@ -128,8 +126,8 @@ class Post_ma(object):
 
     def replace_ma_docs(self, ma_docs, location_dict):
         """
-        location_dict의 형태: 통일 할 것
-        split: {'ma': [[app_id, (doc_loc, ma_loc)], ...]
+        location_list의 형태: 통일 할 것
+        split: {'ma': [[app_id, doc_loc, ma_loc], ...]
         merge: {'ma1/ma2': [[app_id, doc_loc], ...]}
         """
         if not self.post_ma_pairs:
@@ -151,62 +149,26 @@ class Post_ma(object):
 ###############################################################
 
 class Unknown_words(object):
-    def __init__(self, ma_docs, app_id_list):
-        self.ma_docs = ma_docs
-        self.app_id_list = app_id_list
-        self.unknown_loc = defaultdict(list)  # inversed index {ma: [(app_id, loc), (app_id, loc)...]}
+    def __init__(self, ):
+        self.unknown_loc_dict = None
 
-    def get_unknown_words(self):
+    def get_unknown_words(self, ma_docs):
         unknown_list = []
         total_ma_count = 0
-        for app_id in self.app_id_list:
-            for doc_loc, doc in enumerate(self.ma_docs[app_id]):
-                for ma_loc, ma in enumerate(doc):
-                    total_ma_count += 1
-                    if ma[1] in ['UNKNOWN', 'NA']:
-                        unknown_list.append(ma[0])
-                        self.unknown_loc[ma[0]].append([app_id, tuple([doc_loc, ma_loc])])
-        print('Unknown(중복제거): {}, Total Unknown: {}, Total MA: {}'.format(len(set(unknown_list)), len(unknown_list), total_ma_count))
-        return list(set(unknown_list))
+        for app_loc, docs in tqdm(enumerate(ma_docs), desc='Extracting unknowns:', total=len(ma_docs)):
+            for doc_loc, doc in enumerate(docs):
+                unknowns = [(ma[0], (app_loc, doc_loc, ma_loc)) for ma_loc, ma in enumerate(doc) if ma[1] in ['UNKNOWN', 'NA']]
+                unknown_list.append(unknowns)
+                total_ma_count += 1
 
-    def remove_no_meanings(self, unknown_list, tokenizer):
-        """UNKOWN 단어들의 앞뒤에 ㅡ,ㅉ,ㅠ,ㅜ,ㅋ 등등 를 떼어내고 형태소 분석 결과 내보냄"""
-        rest_unknown_list = []
-        unknown_rule = defaultdict()
-        for unknown_word in unknown_list:
-            new_word, rest = self.check_word(unknown_word)
-            tokens = tokenizer.pos(new_word)
-            if len(tokens) > 1:
-                unknown_rule[unknown_word] = tokens
-            elif (len(tokens) == 1) and (tokens[0][1] not in ['UNKNOWN', 'NA']):
-                unknown_rule[unknown_word] = tokens
-            else:
-                rest_unknown_list.append(unknown_word)
+        unknown_words = [ma for doc in unknown_list for ma, loc in doc]
+        unique_list = list(set(unknown_words))
 
-        return unknown_rule, rest_unknown_list
+        self.unknown_loc_dict = {ma: loc for doc in unknown_list for ma, loc in doc}
+        print('Unknown(중복제거): {}, Total Unknown: {}, Total MA: {}'.format(len(unique_list),
+                                                                            len(unknown_words), total_ma_count))
 
-    def check_word(self, word):
-        new_word = []
-        rest = []
-        for char in word:
-            if self.check_jamo(char):
-                rest.append(char)
-            else:
-                new_word.append(char)
-        new_word = ''.join(new_word)
-
-        return new_word, rest
-
-    def check_jamo(self, char):
-        CHOSUNG_LIST = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
-        JUNGSUNG_LIST = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ',
-                         'ㅢ', 'ㅣ']
-        JONGSUNG_LIST = [' ', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ',
-                         'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
-        if (char in CHOSUNG_LIST) | (char in JUNGSUNG_LIST) | (char in JONGSUNG_LIST):
-            return True
-        else:
-            return False
+        return unique_list
 
     # shape changer
     def shape_changer(self, dictionary, tokenizer_name='komoran'):
@@ -216,8 +178,8 @@ class Unknown_words(object):
         """
         unk_pos = 'UNKNOWN' if tokenizer_name == 'twitter' else 'NA'
         changed_ma_list = []
-        for items in dictionary.items():
-            changed_ma_list.append(tuple([[tuple([items[0], unk_pos])], items[1]]))
+        for before, after in dictionary.items():
+            changed_ma_list.append(tuple([[tuple([before, unk_pos])], after]))
 
         return changed_ma_list
 
@@ -241,8 +203,7 @@ class Make_dictionay(object):
 
         # dictionary 종류 고르기
         self.set_normal_dict_option()
-        # command_line은 iter문만 tqdm 로 바꾸면 됨
-        for doc in tqdm(ma_lists, desc="Processing", total=len(ma_lists)):  # 1 개의 app에 대해서
+        for doc in tqdm(ma_lists, desc="Counting Words...", total=len(ma_lists)):  # 1 개의 app에 대해서
             for ma_doc in doc:
                 ma_doc = self.filter_ma(ma_doc)
                 self.count_words(ma_doc)
@@ -277,6 +238,9 @@ class Make_dictionay(object):
     def filter_ma(self, ma_doc):
         if self.choose_pos_list:
             ma_doc = [(lex, pos) for (lex, pos) in ma_doc if self.is_pos_in(pos)]
+            # 띄어써진 단어들 붙여주기
+            ma_doc = [(''.join(lex.split(' ')), pos) if ' ' in lex else (lex, pos) for (lex, pos) in ma_doc]
+
         if not self.mecab_option:  # komoran 품사단어 뒤에 +다 붙여주기
             ma_doc = [(lex + '다', pos) if pos in ['VV', 'VA'] else (lex, pos) for (lex, pos) in ma_doc]
         if self.min_word_length >= 2:
@@ -286,13 +250,10 @@ class Make_dictionay(object):
         return ma_doc
 
     def is_pos_in(self, pos):
-        if not self.mecab_option:
-            if pos in self.choose_pos_list:
-                return True
-            else:
-                return False
+        if pos in self.choose_pos_list:
+            return True
         else:
-            pass
+            return False
 
     def get_word_idx(self):
         self.word_idx = {w: i for i, w in enumerate(self.word_count.keys())}
@@ -319,10 +280,10 @@ class Make_dictionay(object):
         self.get_word_count(ma_lists)
         self.get_word_idx()
 
+    # def update(self, new_dict):
 
     ####### only for dictionary option 1
     def filter_by_dict(self, doc):
-        """형태소 list 를 단어 idx로 바꾼다"""
         if self.normal_dict_option == 0:
             doc = [ma for ma in doc if ma in self.word_count.keys()]
         elif self.normal_dict_option == 1:
@@ -330,30 +291,42 @@ class Make_dictionay(object):
 
         return doc
 
-    def document_transform(self, ma_lists):
+    def document_transform(self, ma_lists, ratings_lists=None):
         """사전에 존재하는 것들만 문서로 바꿔준다 app_id별로 [[word1, word2, ...], [...] 순서는 상관 없음"""
         documents = []
-        for docs in tqdm(ma_lists, desc="Processing", total=len(ma_lists)):
+        ratings = []
+        for i, docs in tqdm(enumerate(ma_lists), desc="Filtering...", total=len(ma_lists)):
             filtered_docs = []
-            for doc in docs:
+            filtered_ratings = []
+            for j, doc in enumerate(docs):
                 new_doc = self.filter_by_dict(doc)
-                if new_doc:
+                if len(new_doc) > 0:
                     filtered_docs.append(new_doc)
+                    if ratings_lists:
+                        filtered_ratings.append(ratings_lists[i][j])
+
             documents.append(filtered_docs)
+            ratings.append(filtered_ratings)
 
-        return documents
+        if ratings:
+            return documents, ratings
+        else:
+            return documents
 
-    def flatten_all_docs(self, all_docs):
+    def flatten_all_docs(self, all_docs, by_app_id=False):
         flattened_docs = []
-        for docs in tqdm(all_docs, desc="Processing", total=len(all_docs)):
-            for doc in docs:
-                flattened_docs.append(doc)
+        for docs in tqdm(all_docs, desc="Processing...", total=len(all_docs)):
+            if by_app_id:
+                flattened_docs.append([val for doc in docs for val in doc])
+            else:
+                for doc in docs:
+                    flattened_docs.append(doc)
 
         return flattened_docs
 
-    def save_as_file(self, filename, docs):
-        file_path = './data/' + filename + '.txt'
-        with open(file_path, 'w', encoding='utf-8') as outputfile:
+
+    def save_as_file(self, filepath, docs):
+        with open(filepath, 'w', encoding='utf-8') as outputfile:
             for doc in tqdm(docs, desc='saving', total=len(docs)):
                 print(' '.join(doc), file=outputfile)
 
@@ -362,7 +335,7 @@ class Make_dictionay(object):
             docs = []
             for line in file:
                 if option_split:
-                    doc = line.split()
+                    doc = line.split(' ').strip()
                 else:
                     doc = line.strip()
                 docs.append(doc)
@@ -373,20 +346,29 @@ class Make_dictionay(object):
 ###################################################################
 
 class Spacing(object):
-    def __init__(self, print_util):
+    def __init__(self):
         self.app_id_list = None
-        self.print_util = print_util
+        self.check_list = None
+        self.basic_check_list = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ',
+                                 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ', 'ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ',
+                                 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ', 'ㄳ', 'ㄵ',
+                                 'ㄶ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅄ']
 
-    def fit(self, docs):
+    def fit(self, docs, add_check_list=None):
+        if add_check_list:
+            self.check_list = self.basic_check_list + add_check_list
+        else:
+            self.check_list = self.basic_check_list
         self.app_id_list = [k for k in docs.keys()]
-        for k, app_id in enumerate(self.app_id_list):
+        for app_id in tqdm(self.app_id_list, desc='Processing spacing', total=len(self.app_id_list)):
             for i, doc in enumerate(docs[app_id]['reviews']):
                 docs[app_id]['reviews'][i] = self.space_jamo(doc)
-                self.print_util(i, 0.01)
-            print(k/len(self.app_id_list), flush=True)
         return docs
 
     def space_jamo(self, doc):
+        if not self.check_list:
+            self.check_list = self.basic_check_list
+
         doc_splited = [char for char in doc]
         space_idx = self.get_spacing_index(doc_splited)
         tokens_list = self.split_doc_to_words(doc, space_idx)
@@ -405,7 +387,7 @@ class Spacing(object):
     def get_spacing_index(self, doc_splited):
         space_idx = []
         doc_len = len(doc_splited)
-        for i in range(1, doc_len):
+        for i in range(1, doc_len+1):
             window = deque(islice(doc_splited, i), maxlen=2)  # 번째 원소 전까지 window가 움직이는거
             if self.check_jamo(window):
                 space_idx.append(i - 1)
@@ -418,11 +400,8 @@ class Spacing(object):
         return space_idx
 
     def check_jamo(self, window):
-        check_list = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ',
-                      'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ', 'ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ',
-                      'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ', 'ㄳ', 'ㄵ',
-                      'ㄶ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅄ']
-        mask = [True if char in check_list else False for char in window]
+
+        mask = [True if char in self.check_list else False for char in window]
         if sum(mask) == 1:
             return True
         else:
@@ -441,29 +420,29 @@ def commandline_print(text, sleep_time=0.01):
     time.sleep(sleep_time)
 
 
-def get_data_json(filename):
-    with open(filename, 'r', encoding='utf-8') as file:
+def get_data_json(filepath):
+    with open(filepath, 'r', encoding='utf-8') as file:
         texts = file.read()
         data = ujson.loads(texts)
         app_ids_list = list(data.keys())
     return data, app_ids_list
 
 
-def save_json(filename, docs):
-    with open(filename, 'w', encoding='utf-8') as file:
+def save_json(filepath, docs):
+    with open(filepath, 'w', encoding='utf-8') as file:
         texts = ujson.dumps(docs, ensure_ascii=False)
         print(texts, file=file)
 
 
-def read_jsonl(filename):
+def read_jsonl(filepath):
     key_app_id = 'app_id'
     key_ratings = 'ratings'
     key_ma = 'ma'
     app_id_list = []
     ratings_lists = []
     ma_lists = []
-    with open(filename, 'r', encoding='utf-8') as file:
-        for line in tqdm(file, desc="Reading documents", total=get_num_lines(filename)):
+    with open(filepath, 'r', encoding='utf-8') as file:
+        for line in tqdm(file, desc="Reading documents", total=get_num_lines(filepath)):
             doc = ujson.loads(line)
             app_id_list.append(doc[key_app_id])
             ratings_lists.append(doc[key_ratings])
@@ -484,3 +463,6 @@ def get_num_lines(filename):
     return lines
 
 
+###############################################################
+# word visualization
+###############################################################

@@ -4,7 +4,7 @@ from collections import defaultdict
 from konlpy.tag import Twitter, Komoran, Mecab
 import ujson
 import sys
-
+from tqdm import tqdm
 
 def get_data_json(filename):
     with open(filename, 'r', encoding='utf-8') as file:
@@ -25,7 +25,7 @@ def get_pos(tokenizer, doc, twi_norm=True, twi_stem=True):
 def save_pos_json(filename, docs, app_id_list, tokenizer, twitter_option):
     with open(filename, 'w', encoding='utf-8') as output_file:
         json_doc = defaultdict(list)
-        for app_id in app_id_list:
+        for app_id in tqdm(app_id_list, desc='saving:', total=len(app_id_list)):
             reviews = docs[app_id]['reviews']
             for review in reviews:
                 ma = get_pos(tokenizer, review, twi_norm=twitter_option[0], twi_stem=twitter_option[1])
@@ -37,7 +37,7 @@ def save_pos_json(filename, docs, app_id_list, tokenizer, twitter_option):
 
 def save_pos_json_line(filename, docs, app_id_list, tokenizer, twitter_option):
     with open(filename, 'w', encoding='utf-8') as output_file:
-        for app_id in app_id_list:
+        for app_id in tqdm(app_id_list, desc='saving:', total=len(app_id_list)):
             json_doc = defaultdict()
 
             json_doc['app_id'] = app_id
@@ -48,7 +48,6 @@ def save_pos_json_line(filename, docs, app_id_list, tokenizer, twitter_option):
                 ma = get_pos(tokenizer, review, twi_norm=twitter_option[0], twi_stem=twitter_option[1])
                 json_doc['ma'].append(ma)
 
-            print(app_id)
             json_str = ujson.dumps(json_doc, ensure_ascii=False)
             print(json_str, file=output_file)
 
@@ -59,15 +58,16 @@ def main():
     mecab = Mecab()
 
     train_data, train_app_id_list = get_data_json('./data/train_json_space_jamo.txt')
-    # test_data, test_app_id_list = get_data_json('./data/test_space_jamo.txt')
-
+    test_data, test_app_id_list = get_data_json('./data/test_json_space_jamo.txt')
+    # train_data, train_app_id_list = get_data_json('./data/train_json.txt')
+    # test_data, test_app_id_list = get_data_json('./data/test_json.txt')
     argv_dict = {'tokenizer': {'twitter': twitter,
                                'komoran': komoran,
                                'mecab': mecab},
-                 'data_type': {'train': [train_data, train_app_id_list],},
-                               # 'test': [test_data, test_app_id_list]},
+                 'data_type': {'train': [train_data, train_app_id_list],
+                               'test': [test_data, test_app_id_list]},
                  'file_type': {'json': save_pos_json,
-                               'json_line': save_pos_json_line},
+                               'json_line': save_pos_json_line}
                  }
 
     if len(sys.argv) < 2:
