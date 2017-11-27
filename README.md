@@ -2,7 +2,7 @@
 
 Jupyter notebook 링크: [링크](https://nbviewer.jupyter.org/github/simonjisu/app_store_reviews_analysis/blob/master/Exploring_App_Store_Reviews.ipynb)
 
-Slider Share 링크: [링크]()
+Slider Share 링크: [링크](https://www.slideshare.net/secret/LaSRTJVgvvtuAx)
 
 개인 프로젝트
 
