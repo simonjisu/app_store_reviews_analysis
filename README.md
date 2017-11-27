@@ -1,6 +1,8 @@
-# AppStore Reiview 분석
+# Exploring App Store Reiview 분석
 
 Jupyter notebook 링크: [링크]()
+
+Slider Share 링크: [링크]()
 
 개인 프로젝트
 
