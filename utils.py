@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 
 from itertools import chain, islice
-from collections import deque, defaultdict, Counter
-from IPython.display import clear_output
+from collections import deque, defaultdict, Counter, OrderedDict
 from tqdm import tqdm
+import pandas as pd
+import numpy as np
 import mmap
-import time
 import os
-import sys
 import ujson
+import re
 
 class Post_ma(object):
-    def __init__(self, file_path, auto_load=True):
+    def __init__(self, file_path, tokenizer, auto_load=True):
         """
         사용법:
         1. update를 사용해 규칙사전을 등록, 2번째 부터는 자동으로 불러오기함
@@ -19,6 +19,7 @@ class Post_ma(object):
         """
         self.file_path = file_path
         self.post_ma_pairs = []
+        self.tokenizer = tokenizer
         if auto_load:
             if os.path.exists(self.file_path):
                 self.load()
@@ -27,13 +28,9 @@ class Post_ma(object):
                 print('Can not load file: {}! '.format(self.file_path),
                       'There is no file, please create file by update method(take option write=True)')
 
-    def __doc__(self):
-        """
-        post processing class rules,
-        rules are saved at data file
-        """
     # update part
     def update(self, ma_pairs, write=False):
+        """[([before_ma, before_pos], [after_ma, after_pos]), (), ()...]"""
         button = 'w' if write else 'a'
         with open(self.file_path, button, encoding='utf-8') as output_file:
             output_file.write('')
@@ -67,6 +64,7 @@ class Post_ma(object):
 
     # load part
     def load(self):
+        """[([[before_ma, before_pos]], [[after_ma, after_pos]]), (), ()...]"""
         with open(self.file_path, 'r', encoding='utf-8') as file:
             lines = file.readlines()
             result = []
@@ -75,11 +73,13 @@ class Post_ma(object):
         self.post_ma_pairs = result
 
     def combinate_before_after(self, line):
+        """before >> after"""
         before, after = line.strip().split('>>')
         return tuple((self.tab_str_to_double_list(before),
                       self.tab_str_to_double_list(after)))
 
     def tab_str_to_double_list(self, string):
+        """string = ma \t pos \t ma \t pos..."""
         tokens = string.strip().split('\t')
         n = len(tokens)
         result = []
@@ -91,7 +91,12 @@ class Post_ma(object):
                 result.append(pair)
         return result
 
-    # change part
+    # change part post_ma
+    # 1. 바꾸고 싶은 단어를 등록한다. [( [[단어, 형태소]] , [[바뀐 단어, 형태소]] )]
+    # 2. NA 중에 바꾸고 싶은 단어가 있는지 확인하고 스페이싱을 한다.
+    # 3. 형태소 분석을 한다.
+    # 4. 분리된 형태소에서 단어를 바꿔준다.
+
     def find_sublists(self, seq, sublist):
         length = len(sublist)
         for index, value in enumerate(seq):
@@ -105,30 +110,61 @@ class Post_ma(object):
         for start, end in sublists:
             seq[start:end] = replacement
 
+    def search_word_and_spacing(self, target_list, target_idx, replacement):
+        repl_len = len(replacement[0])
+        partial_start_idx = [m.start() for m in re.finditer(replacement[0], target_list[target_idx][0])]  # start_idxes
+        partial_end_idx = [i + repl_len for i in partial_start_idx]
+        partial_idx = sorted(partial_start_idx + partial_end_idx)
+        partial_words = [target_list[target_idx][0][i:j] for i, j in zip(partial_idx, partial_idx[1:]+[None])]
+        target_list[target_idx][0] = ' '.join(partial_words)
+
+    def try_tokenizing(self, target_list, target_idx, replacement):
+        tokens = self.tokenizer.pos(target_list[target_idx][0])
+        self.replace_list_elem(target_list, target_idx, tokens)
+
     def replace_list_elem(self, target_list, target_idx, replacement):
         target_list.pop(target_idx)
         for i, repl in enumerate(replacement, target_idx):
-            target_list.insert(i, repl)
+            target_list.insert(i, list(repl))
 
-    def split_method(self, ma_docs, ma_set, loc_info):
+    def get_location_dict_by_ma(self, ma, location_dict):
+        """location_dict: unknown으로 부터 얻는 단어들"""
+        keys = [k for k in location_dict.keys()]
+        loc_dict = {k: location_dict[k] for k in keys if ma in k}
+
+        return loc_dict
+
+    def find_ma_loc(self, ma_doc, key):
+        for i, ma in enumerate(ma_doc):
+            if ma[0] == key:
+                return i
+
+    def split_method(self, ma_docs, ma_set, loc_dict):
         """
+        ma_set = ([ma, pos], [ma, pos])
         앞에서 loc_dict에 key는 문자열 하나기 때문에 loc_info에는 doc_loc와 ma_loc둘다 저장됨
         """
-        for app_loc, doc_loc, ma_loc in loc_info:
-            self.replace_list_elem(ma_docs[app_loc][doc_loc], ma_loc, ma_set[1])
+        before = ma_set[0][0]
+        after = ma_set[1]
+        for key in tqdm(loc_dict.keys(), desc='Processings', total=len(loc_dict)):
+            for (app_loc, doc_loc) in loc_dict[key]:
+                ma_loc = self.find_ma_loc(ma_docs[app_loc][doc_loc], key)
+                self.search_word_and_spacing(ma_docs[app_loc][doc_loc], ma_loc, before)
+                self.try_tokenizing(ma_docs[app_loc][doc_loc], ma_loc, before)
+                self.replace_list_elem(ma_docs[app_loc][doc_loc], ma_loc, after)
 
     def merge_method(self, ma_docs, ma_set, loc_info):
         """
         앞에서 loc_dict에 key로 list를 쓸수 없기 때문에 loc_info에는 doc_loc 만 들어가게됨,
         """
-        for app_id, doc_loc in loc_info:
-            self.replace_sublist(ma_docs[app_id][doc_loc], ma_set[0], ma_set[1])
+        for app_loc, doc_loc in loc_info:
+            self.replace_sublist(ma_docs[app_loc][doc_loc], ma_set[0], ma_set[1])
 
-    def replace_ma_docs(self, ma_docs, location_dict):
+    def replace_ma_docs(self, ma_docs, location_dict):  ## 이미 처리했던거 기록할 필요가 있음
         """
-        location_list의 형태: 통일 할 것
-        split: {'ma': [[app_id, doc_loc, ma_loc], ...]
-        merge: {'ma1/ma2': [[app_id, doc_loc], ...]}
+        location_dict: 바꾸고 싶은 단어, 모르는 단어들의 위치(전체)
+        split: {'ma': [app_id, doc_loc], 'ma2':...]
+        merge: {'ma1/ma2': [app_loc, doc_loc], ...}
         """
         if not self.post_ma_pairs:
             print('Plead load post_ma_rules first')
@@ -137,7 +173,8 @@ class Post_ma(object):
         for ma_set in self.post_ma_pairs:
             if len(ma_set[0]) == 1:  # before -> after: split 일때
                 ma_key = ma_set[0][0][0]
-                self.split_method(ma_docs, ma_set, location_dict[ma_key])
+                loc_dict = self.get_location_dict_by_ma(ma_key, location_dict)
+                self.split_method(ma_docs, ma_set, loc_dict)
             elif len(ma_set[0]) > 1:  # before -> after: merge 일때
                 ma_key = '/'.join([word for word in ma_set[0]])
                 self.merge_method(ma_docs, ma_set, location_dict[ma_key])
@@ -150,32 +187,29 @@ class Post_ma(object):
 
 class Unknown_words(object):
     def __init__(self, ):
-        self.unknown_loc_dict = None
+        self.unknown_loc_dict = defaultdict(list)
 
     def get_unknown_words(self, ma_docs):
         unknown_list = []
         total_ma_count = 0
         for app_loc, docs in tqdm(enumerate(ma_docs), desc='Extracting unknowns:', total=len(ma_docs)):
             for doc_loc, doc in enumerate(docs):
-                unknowns = [(ma[0], (app_loc, doc_loc, ma_loc)) for ma_loc, ma in enumerate(doc) if ma[1] in ['UNKNOWN', 'NA']]
-                unknown_list.append(unknowns)
-                total_ma_count += 1
+                for ma in doc:
+                    if ma[1] in ['UNKNOWN', 'NA']:
+                        unknown_list.append(ma[0])
+                        self.unknown_loc_dict[ma[0]].append((app_loc, doc_loc))
+                total_ma_count += len(doc)
 
-        unknown_words = [ma for doc in unknown_list for ma, loc in doc]
-        unique_list = list(set(unknown_words))
+        unique_list = list(set(unknown_list))
 
-        self.unknown_loc_dict = {ma: loc for doc in unknown_list for ma, loc in doc}
         print('Unknown(중복제거): {}, Total Unknown: {}, Total MA: {}'.format(len(unique_list),
-                                                                            len(unknown_words), total_ma_count))
+                                                                            len(unknown_list), total_ma_count))
 
         return unique_list
 
     # shape changer
     def shape_changer(self, dictionary, tokenizer_name='komoran'):
-        """
-        {'ㅜㅜ부탁이예요': [('부탁', 'NNG'), ('이', 'VCP'), ('예요', 'EC')],}
-        이런 사전형을 리스트로 업데이트 할 수 있게 이쁘게 바꿔줌
-        """
+
         unk_pos = 'UNKNOWN' if tokenizer_name == 'twitter' else 'NA'
         changed_ma_list = []
         for before, after in dictionary.items():
@@ -184,7 +218,7 @@ class Unknown_words(object):
         return changed_ma_list
 
 ###############################################################
-# After data Processing
+# Dictionary
 ###############################################################
 
 class Make_dictionay(object):
@@ -306,7 +340,8 @@ class Make_dictionay(object):
                         filtered_ratings.append(ratings_lists[i][j])
 
             documents.append(filtered_docs)
-            ratings.append(filtered_ratings)
+            if ratings_lists:
+                ratings.append(filtered_ratings)
 
         if ratings:
             return documents, ratings
@@ -315,32 +350,38 @@ class Make_dictionay(object):
 
     def flatten_all_docs(self, all_docs, by_app_id=False):
         flattened_docs = []
-        for docs in tqdm(all_docs, desc="Processing...", total=len(all_docs)):
+        for docs in all_docs:
             if by_app_id:
-                flattened_docs.append([val for doc in docs for val in doc])
+                if isinstance(all_docs[0][0], int):
+                    flattened_docs.append([val for val in docs])
+                else:
+                    flattened_docs.append([val for doc in docs for val in doc])
             else:
                 for doc in docs:
                     flattened_docs.append(doc)
 
         return flattened_docs
 
-
     def save_as_file(self, filepath, docs):
         with open(filepath, 'w', encoding='utf-8') as outputfile:
-            for doc in tqdm(docs, desc='saving', total=len(docs)):
-                print(' '.join(doc), file=outputfile)
+            for doc in docs:
+                if isinstance(doc, int):
+                    print(str(doc), file=outputfile)
+                else:
+                    print(' '.join(map(str, doc)), file=outputfile)
 
     def load_file(self, file_path, option_split=True):
         with open(file_path, 'r', encoding='utf-8') as file:
             docs = []
             for line in file:
                 if option_split:
-                    doc = line.split(' ').strip()
+                    doc = line.strip().split(' ')
                 else:
                     doc = line.strip()
                 docs.append(doc)
 
         return docs
+
 ###################################################################
 # Spacing model
 ###################################################################
@@ -407,17 +448,7 @@ class Spacing(object):
         else:
             return False
 
-####### utils
-def notebook_print(text, sleep_time=0.01):
-    clear_output(wait=True)
-    print(text)
-    time.sleep(sleep_time)
-
-
-def commandline_print(text, sleep_time=0.01):
-    sys.stdout.write('processing: {} \r'.format(text))
-    sys.stdout.flush()
-    time.sleep(sleep_time)
+#### utils:
 
 
 def get_data_json(filepath):
@@ -427,6 +458,16 @@ def get_data_json(filepath):
         app_ids_list = list(data.keys())
     return data, app_ids_list
 
+def get_app_name_category(filepath, app_id_list):
+    data = pd.read_csv(filepath, sep='\t')
+    cate_list = []
+    app_name_list = []
+    for app_id in app_id_list:
+        a, cate, name = data.loc[data['app_id'].isin([app_id]), :].values[0]
+        cate_list.append(cate)
+        app_name_list.append(name)
+
+    return cate_list, app_name_list
 
 def save_json(filepath, docs):
     with open(filepath, 'w', encoding='utf-8') as file:
@@ -442,13 +483,25 @@ def read_jsonl(filepath):
     ratings_lists = []
     ma_lists = []
     with open(filepath, 'r', encoding='utf-8') as file:
-        for line in tqdm(file, desc="Reading documents", total=get_num_lines(filepath)):
+        for line in file:
             doc = ujson.loads(line)
             app_id_list.append(doc[key_app_id])
             ratings_lists.append(doc[key_ratings])
             ma_lists.append(doc[key_ma])
 
     return app_id_list, ratings_lists, ma_lists
+
+def save_jsonl(filepath, app_id_list, ratings_lists, ma_lists):
+    key_app_id = 'app_id'
+    key_ratings = 'ratings'
+    key_ma = 'ma'
+    with open(filepath, 'w', encoding='utf-8') as file:
+        for i, app_id in tqdm(enumerate(app_id_list), desc='Saving documents', total=len(app_id_list)):
+            json_dict = {key_app_id: app_id,
+                         key_ratings: ratings_lists[i],
+                         key_ma: ma_lists[i]}
+            line = ujson.dumps(json_dict, ensure_ascii=False)
+            print(line, file=file)
 
 def get_num_lines(filename):
     """빠른 속도로 텍스트 파일의 줄 수를 세어 돌려준다.
@@ -462,7 +515,31 @@ def get_num_lines(filename):
         lines += 1
     return lines
 
+# dataframe utils
+def color_zero_white(val):
+    color = 'white' if val == 0 else 'black'
+    return 'color: %s' % color
 
-###############################################################
-# word visualization
-###############################################################
+def highlight_max_red(data, color='red'):
+    '''
+    highlight the maximum in a Series or DataFrame
+    '''
+    attr = 'color: {}'.format(color)
+    if data.ndim == 1:  # Series from .apply(axis=0) or axis=1
+        is_max = data == data.max()
+        return [attr if v else '' for v in is_max]
+    else:  # from .apply(axis=None)
+        is_max = data == data.max().max()
+        return pd.DataFrame(np.where(is_max, attr, ''),
+                            index=data.index, columns=data.columns)
+
+def magnify():
+    return [dict(selector="th",
+                 props=[("font-size", "4pt")]),
+            dict(selector="td",
+                 props=[('padding', "0em 0em")]),
+            dict(selector="th:hover",
+                 props=[("font-size", "12pt")]),
+            dict(selector="tr:hover td:hover",
+                 props=[('max-width', '200px'),
+                        ('font-size', '12pt')])]
