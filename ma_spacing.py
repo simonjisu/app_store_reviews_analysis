@@ -1,11 +1,10 @@
-from utils import *
+from utils import Spacing, read_jsonl, save_jsonl
 
-def space_jamo(filepath, type_filepath):
-    docs, app_id_list = get_data_json(type_filepath)
+def space_jamo(output_file_path, input_file_path):
+    app_id_list, app_name_list, cate_list, rating_list, review_list = read_jsonl(input_file_path, key_ma=False)
     space_model = Spacing()
-    new_docs = space_model.fit(docs, add_check_list=['!', '~', '.', ';', ':'])
-    save_json(filepath, new_docs)
+    new_review_list = space_model.fit(review_list, add_check_list=['!', '~', '.', ';', ':'])
+    save_jsonl(output_file_path, app_id_list, app_name_list, cate_list, rating_list, new_review_list, key_ma=False)
 
-space_jamo(filepath='./data/train_json_space_jamo.txt', type_filepath='./data/train_json.txt')
-space_jamo(filepath='./data/test_json_space_jamo.txt', type_filepath='./data/test_json.txt')
+space_jamo(output_file_path='./data/docs_jsonl_space_jamo.txt', input_file_path='./data/docs_jsonl.txt')
 

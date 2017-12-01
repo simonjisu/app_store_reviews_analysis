@@ -1,100 +1,118 @@
 from analysis import *
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import KFold, train_test_split, GridSearchCV
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 
-def NB_data_processing(jsonl_file_path, flat_file_path, choose_pos):
+def NB_data_processing(file_path, save_file_path, major_pos):
+    make_dict, app_id_list, app_name_list, cate_list, rating_list, ma_list = \
+        make_keyword_dict(file_path, major_pos, print_keywords=False, komoran_option=True, only_ma=False)
 
-    make_dict, app_id_list, ratings_lists, ma_lists = make_keyword_dict(jsonl_file_path, choose_pos=choose_pos, print_keywords=False, mecab_option=True)
-    boundary = filter_docs_by_dict(make_dict, ma_lists, ratings_lists, save_file_path=flat_file_path, by_app_id=False)
-    # X, y
-    flat_docs, flat_ratings = data_loading(save_file_path=flat_file_path, make_dict=make_dict)
+    filter_docs_by_dict(make_dict, app_id_list, app_name_list, cate_list, rating_list, ma_list,
+                        save_file_path=save_file_path, by_app_id=False)
 
-    return make_dict, flat_docs, flat_ratings, boundary, app_id_list
 
-def NB_model(vectorizer, make_dict, X, y, ngram_range=(1, 2)):
-    model = Pipeline([
-                ('vect', vectorizer(analyzer=str.split, vocabulary=make_dict.word_idx, ngram_range=ngram_range)),
+def NB_build_clf(train_coo_matrix, train_ratings):
+    clf = MultinomialNB()
+    y = np.asarray(train_ratings)
+    clf.fit(train_coo_matrix, y.ravel())
+
+    return clf
+
+
+def get_conf_matrix(clf, test_coo_matrix, test_ratings):
+    pred_ratings = clf.predict(test_coo_matrix)
+    conf_mat = confusion_matrix(np.asarray(test_ratings), pred_ratings)
+    norm_conf_mat = conf_mat.astype(np.float) / conf_mat.sum(axis=1)[:, np.newaxis]
+    print('=' * 50)
+    print('Accurary: {0:.4f}%'.format(accuracy_score(np.asarray(test_ratings), pred_ratings)*100))
+    print('=' * 50)
+    print('Classification Report')
+    print('=' * 50)
+    print(classification_report(test_ratings, pred_ratings))
+    print('='*50)
+    return conf_mat, norm_conf_mat
+
+
+def draw_conf(conf_mat, test_ratings):
+    labels = sorted(set(test_ratings))
+    np.set_printoptions(precision=2)
+    tick_marks = np.arange(len(labels))
+
+    fig = plt.figure()
+    plt.imshow(conf_mat, interpolation="nearest", cmap=plt.cm.Blues)
+    plt.title("Confusion Matrix", fontsize=20)
+    plt.colorbar()
+    plt.xticks(tick_marks, labels)
+    plt.yticks(tick_marks, labels)
+    plt.ylabel("Answer")
+    plt.xlabel("Predict")
+    plt.show()
+
+
+def NB_main(load_file_path, vectorizer, ngram_range=(1, 2)):
+    app_id_list, app_name_list, cate_list, rating_list, ma_list = read_jsonl(load_file_path)
+    # word_idx = load_json('./data/word_idx_json_NB.txt')
+    spaced_ma_list = ma_transform_by_spacing(ma_list)
+    # 기존 분포
+    ax = plt.axes()
+    ratings = np.asarray(rating_list, dtype=np.int)
+    sns.countplot(ratings, ax = ax)
+    ax.set_title('기존 Ratings 문서 분포', fontsize=20)
+    plt.show()
+
+    # confusion matrix
+    print('**making confusion matrix**')
+    train_docs, test_docs, train_ratings, test_ratings = train_test_split(spaced_ma_list, rating_list)
+    train_coo_matrix, test_coo_matrix, words, vec = get_matrix(vectorizer, train_docs, ngram_range=ngram_range,
+                                                               mode_NB=True, test_spaced_ma_list=test_docs)
+
+    clf = NB_build_clf(train_coo_matrix, train_ratings)
+    conf_mat, norm_conf_mat = get_conf_matrix(clf, test_coo_matrix, test_ratings)
+    draw_conf(conf_mat, test_ratings)
+    draw_conf(norm_conf_mat, test_ratings)
+
+
+def NB_build_pipeline():
+    pipeline = Pipeline([
+                ('vect', TfidfVectorizer(analyzer=str.split)),
                 ('mb', MultinomialNB()),
             ])
 
-    model.fit(X, np.array(y).ravel())
-
-    return model
-
-def NB_train(vectorizer, ngram_range=(1, 2), option_major_pos=True):
-    jsonl_file_path = './data/train_jsonl_ma_komoran_after_processing.txt'
-    flat_file_path = ['./data/train_flat_docs.txt', './data/train_flat_ratings.txt']
-
-    if option_major_pos:
-        major_pos = ["NNG", "NNP", "NP", "XR", "VV", "VA", "MAG", "MAJ"]
-        choose_pos = major_pos
-    else:
-        full_morph = ['NNG', 'NNP', 'NNB', 'NR', 'NP', 'VV', 'VA', 'VX', 'VCP', 'VCN', 'MM', 'MAG', 'MAJ', 'IC']
-        empty_morph = ['JKS', 'JKC', 'JKG', 'JKO', 'JKB', 'JKV', 'JKQ', 'JX', 'JC', 'EP', 'EF', 'EC', 'ETN', 'ETM', 'XPN',
-                       'XSN', 'XSV', 'XSA']
-        egun = ['XR']
-        not_koreans = ['SL', 'SH', 'SN']
-        choose_pos = full_morph + egun + not_koreans + empty_morph
-
-    # build model
-    print('** Training Model **')
-    make_dict, flat_docs, flat_ratings, boundary, _ = NB_data_processing(jsonl_file_path, flat_file_path, choose_pos)
-    model = NB_model(vectorizer, make_dict, flat_docs, flat_ratings, ngram_range=ngram_range)
-
-    # flat_docs = [doc.split(' ') for doc in flat_docs]
-
-    return model, boundary, flat_docs, np.array(flat_ratings)
-
-def NB_test(model, option_major_pos=True):
-    test_file_path = './data/test_jsonl_ma_komoran_after_processing.txt'
-    flat_file_path = ['./data/test_flat_docs.txt', './data/test_flat_ratings.txt']
-
-    if option_major_pos:
-        major_pos = ["NNG", "NNP", "NP", "XR", "VV", "VA", "MAG", "MAJ"]
-        choose_pos = major_pos
-    else:
-        full_morph = ['NNG', 'NNP', 'NNB', 'NR', 'NP', 'VV', 'VA', 'VX', 'VCP', 'VCN', 'MM', 'MAG', 'MAJ', 'IC']
-        empty_morph = ['JKS', 'JKC', 'JKG', 'JKO', 'JKB', 'JKV', 'JKQ', 'JX', 'JC', 'EP', 'EF', 'EC', 'ETN', 'ETM', 'XPN',
-                       'XSN', 'XSV', 'XSA']
-        egun = ['XR']
-        not_koreans = ['SL', 'SH', 'SN']
-        choose_pos = full_morph + egun + not_koreans + empty_morph
-
-    print('** Testing Model **')
-
-    _, test_flat_docs, test_flat_ratings, test_boundary, test_app_id_list = NB_data_processing(test_file_path, flat_file_path, choose_pos)
-    pred_y = model.predict(test_flat_docs)
-
-    # test_flat_docs = [doc.split(' ') for doc in test_flat_docs]
-
-    print('Done!\n')
-    return pred_y, test_boundary, test_flat_docs, np.array(test_flat_ratings), test_app_id_list
+    return pipeline
 
 
-def compare_pos(vectorizer, report=True):
-    print('==================================\n', '** Major Pos **')
-    print('==================================\n')
+def NB_CVtest(load_file_path, n_split=10):
+    app_id_list, app_name_list, cate_list, rating_list, ma_list = read_jsonl(load_file_path)
+    spaced_ma_list = ma_transform_by_spacing(ma_list)
 
-    model1, _, _, _ = NB_train(vectorizer, ngram_range=(1, 2), option_major_pos=True)
-    pred_y1, _, _, test_y1, _ = NB_test(model1, option_major_pos=True)
-    ac1 = accuracy_score(test_y1, pred_y1) * 100
+    # GridSearch CV-test Tuning
+    pipeline = NB_build_pipeline()
 
-    print('==================================\n', '** All Pos **')
-    print('==================================\n')
+    parameters = {
+        "vect__max_features": (5000, None),
+        "vect__ngram_range": ((1, 1), (1, 2)),
+        "vect__use_idf": (True, False),
+        "vect__smooth_idf": (True, False),
+        "vect__sublinear_tf": (True, False),
+        "vect__norm": ("l1", "l2", None),
+        "mb__alpha": (1.0, 2.0),
+    }
+    cv = KFold(n_splits=n_split, shuffle=True)
+    grid_search = GridSearchCV(pipeline, parameters, n_jobs=-1, verbose=1, scoring="accuracy", cv=cv)
+    X = spaced_ma_list
+    y = rating_list
+    grid_search.fit(X, y)
+    best_parameters = grid_search.best_estimator_.get_params()
 
-    model2, _, _, _ = NB_train(vectorizer, ngram_range=(1, 2), option_major_pos=False)
-    pred_y2, _, _, test_y2, _ = NB_test(model2, option_major_pos=False)
-    ac2 = accuracy_score(test_y2, pred_y2) * 100
 
-    print('==================================\n')
-    print('Using Major Pos, Accuracy Score is {0:.2f}%,\n Using All Pos, Accuracy Score is {1:.2f}%.\n'.format(ac1, ac2))
-    if report:
-        print('==================================\n', 'Classification Report: Major Pos')
-        print('==================================\n')
-        print(classification_report(test_y1, pred_y1))
-        print('==================================\n', 'Classification Report: All Pos')
-        print('==================================\n')
-        print(classification_report(test_y2, pred_y2))
+    print("Best score: {}".format(grid_search.best_score_))
+
+    print("Best parameter set:")
+
+    for param_name in parameters:
+        print("\t{}: {}".format(param_name, best_parameters[param_name]))
 

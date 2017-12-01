@@ -1,30 +1,27 @@
-from analysis import *
+from utils import read_jsonl, color_zero_white, color_red, color_blue, highlight_max_red, magnify
+from analysis import ma_transform_by_spacing, get_matrix
 from sklearn.cluster import MiniBatchKMeans, KMeans
+from collections import OrderedDict
+import pandas as pd
+import numpy as np
 
-def Kmeans_clustering(n_apps, jsonl_file_path, flat_file_path, cate_name_path, choose_pos, n_cluster=None):
-    make_dict, app_id_list, ratings_lists, ma_lists = make_keyword_dict(jsonl_file_path, choose_pos=choose_pos,
-                                                                        print_keywords=False)
-    boundary = filter_docs_by_dict(make_dict, ma_lists[:n_apps], ratings_lists, save_file_path=flat_file_path,
-                                   by_app_id=True)
+def Kmeans_clustering(load_file_path, vectorizer, n_cluster=None):
+    app_id_list, app_name_list, cate_list, rating_list, ma_list = read_jsonl(load_file_path)
+    # word_idx = load_json('./data/word_idx_json_by_app_id.txt')
+    spaced_ma_list = ma_transform_by_spacing(ma_list)
+    coo_matrix, words, _ = get_matrix(vectorizer, spaced_ma_list)
 
-    flat_docs, flat_ratings = data_loading(save_file_path=flat_file_path, make_dict=make_dict)
-    category_list, app_name_list = get_app_name_category(cate_name_path, app_id_list)
-    coo_matrix, words = get_tfidf_matrix(flat_docs, make_dict)
-    # category 에 nan가 섞여 있음
-    category_list = ['None' if type(i) == float else i for i in category_list]
     if not n_cluster:
-        n_cluster = len(set(category_list))
-    m = coo_matrix.toarray()
-    # model = KMeans(n_clusters=n_cluster, verbose=0)
-    model = MiniBatchKMeans(n_clusters=n_cluster, verbose=0, n_init=10, batch_size=100)
+        n_cluster = len(set(cate_list))
 
+    m = coo_matrix.toarray()
+    model = MiniBatchKMeans(n_clusters=n_cluster, verbose=0, n_init=10, batch_size=100)
     model.fit(m)
 
-    return model, words, boundary, flat_docs, flat_ratings, app_id_list[:n_apps], category_list[:n_apps], app_name_list[:n_apps]
+    return model, words, app_id_list, app_name_list, cate_list, rating_list, ma_list
 
 
 def get_cent_words(model, words, n_cluster, n_max):
-
     ordered_centroids = model.cluster_centers_.argsort()[:, ::-1]
     cluster_dict = OrderedDict()
     for cluster_num in range(n_cluster):
@@ -36,6 +33,7 @@ def get_cent_words(model, words, n_cluster, n_max):
 
     return table
 
+
 def get_clusters_df(model, category_list, app_name_list):
     df = pd.DataFrame({'cluster': model.labels_,
                       'category': category_list,
@@ -46,28 +44,14 @@ def get_clusters_df(model, category_list, app_name_list):
     return df, df2
 
 
-def main_cluster(n_cluster=24, n_max=10, option_major_pos=True, n_apps=2985):
+def main_cluster(vectorizer, n_cluster=24, n_max=10):
 
-    jsonl_file_path = './data/train_jsonl_ma_komoran_after_processing.txt'
-    flat_file_path = ['./data/train_flat_docs_by_app_id.txt', './data/train_flat_ratings_by_app_id.txt']
-    cate_name_path = './data/cate_app_name_train.txt'
+    load_file_path = './data/docs_jsonl_ma_by_app_id.txt'
 
-    if option_major_pos:
-        major_pos = ["NNG", "NNP", "NP", "XR", "VV", "VA", "MAG", "MAJ"]
-        choose_pos = major_pos
-    else:
-        full_morph = ['NNG', 'NNP', 'NNB', 'NR', 'NP', 'VV', 'VA', 'VX', 'VCP', 'VCN', 'MM', 'MAG', 'MAJ', 'IC']
-        empty_morph = ['JKS', 'JKC', 'JKG', 'JKO', 'JKB', 'JKV', 'JKQ', 'JX', 'JC', 'EP', 'EF', 'EC', 'ETN', 'ETM',
-                       'XPN','XSN', 'XSV', 'XSA']
-        egun = ['XR']
-        signs = ['SF', 'SE', 'SS', 'SP', 'SO', 'SW']
-        not_koreans = ['SL', 'SH', 'SN']
-        choose_pos = full_morph + egun + not_koreans # + empty_morph
-    #
-    model, words, boundary, flat_docs, flat_ratings, app_id_list, category_list, app_name_list = \
-        Kmeans_clustering(n_apps, jsonl_file_path, flat_file_path, cate_name_path, choose_pos, n_cluster=n_cluster)
+    model, words, app_id_list, app_name_list, cate_list, rating_list, ma_list = \
+        Kmeans_clustering(load_file_path, vectorizer, n_cluster=n_cluster)
     t = get_cent_words(model, words, n_cluster=n_cluster, n_max=n_max)
-    df, df2 = get_clusters_df(model, category_list, app_name_list)
+    df, df2 = get_clusters_df(model, cate_list, app_name_list)
 
     re_df = pd.DataFrame(np.hstack([t.values, df2.values]))
     re_df.columns = ['키워드'+str(i) for i in range(1, n_max+1)] + ['앱의 갯수', '실제 카테고리들']
@@ -76,6 +60,4 @@ def main_cluster(n_cluster=24, n_max=10, option_major_pos=True, n_apps=2985):
     df_ = df.pivot_table('app_name', 'cluster', 'category', aggfunc='count').T
     re_df.index = re_df.index + 1
     df_.columns = df_.columns + 1
-    return re_df, df_
-
-# utils
+    return re_df, df_, df

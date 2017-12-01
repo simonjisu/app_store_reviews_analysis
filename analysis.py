@@ -1,6 +1,8 @@
 from utils import *
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 import numpy as np
+import pandas as pd
+from pprint import pprint
 
 ##
 # full_morph = ['NNG', 'NNP', 'NNB', 'NR', 'NP', 'VV', 'VA', 'VX', 'VCP', 'VCN', 'MM', 'MAG', 'MAJ', 'IC']
@@ -10,175 +12,156 @@ import numpy as np
 # signs = ['SF', 'SE', 'SS', 'SP', 'SO', 'SW']
 # not_koreans = ['SL', 'SH', 'SN']
 
-def make_keyword_dict(file_path, choose_pos, print_keywords=True, mecab_option=False):
+def make_keyword_dict(file_path, choose_pos, print_keywords=True, komoran_option=False, only_ma=False):
     """주요 품사별로 사전 만들기"""
-    app_id_list, ratings_lists, ma_lists = read_jsonl(file_path)
-    make_dict = Make_dictionay(mecab_option=mecab_option)
-    make_dict.fit(ma_lists, choose_pos=choose_pos, normal_dict_option=1)
+    if only_ma:
+        app_id_list, ma_list = read_jsonl(file_path, only_ma=only_ma)
+    else:
+        app_id_list, app_name_list, cate_list, rating_list, ma_list = read_jsonl(file_path, only_ma=only_ma)
+
+    make_dict = Make_dictionay(komoran_option=komoran_option)
+    make_dict.fit(ma_list, choose_pos=choose_pos, normal_dict_option=1)
     if print_keywords:
         print('최다 빈도수 단어 TOP 10')
-        print('===============')
-        print(make_dict.word_count.most_common(10))
+        print('='*20)
+        pprint(make_dict.word_count.most_common(10))
+        print('='*20)
+        print('총 단어수:', len(make_dict.word_idx))
 
-    return make_dict, app_id_list, ratings_lists, ma_lists
-
-##
-
-def filter_docs_by_dict(make_dict, ma_lists, ratings_lists=None, save_file_path=None, by_app_id=False):
-    """
-    사전을 기준으로 문서 단어를 추출
-    save_file_path가 rating_list있을 때 list로 넣을 것
-    """
-    if ratings_lists:
-        filtered_docs, filtered_ratings = make_dict.document_transform(ma_lists, ratings_lists)
-        boundary = get_boundary(filtered_docs)
-        flat_docs = make_dict.flatten_all_docs(filtered_docs, by_app_id=by_app_id)
-        flat_ratings = make_dict.flatten_all_docs(filtered_ratings, by_app_id=by_app_id)
-        make_dict.save_as_file(save_file_path[0], flat_docs)
-        make_dict.save_as_file(save_file_path[1], flat_ratings)
-
-        return boundary
-
+    if only_ma:
+        return make_dict, app_id_list, ma_list
     else:
-        filtered_docs = make_dict.document_transform(ma_lists)
-        flat_docs = make_dict.flatten_all_docs(filtered_docs, by_app_id=by_app_id)
-        make_dict.save_as_file(save_file_path, flat_docs)
-        boundary = get_boundary(filtered_docs)
+        return make_dict, app_id_list, app_name_list, cate_list, rating_list, ma_list
 
-        return boundary
 
-def extract_key_word(matrix, vocab_idx, app_id_list, n_rank=10):
+def filter_docs_by_dict(make_dict, app_id_list, app_name_list, cate_list, rating_list, ma_list, by_app_id,
+                        save_file_path=None):
+    """
+    사전을 기준으로 문서 단어를 추출, by_app_id 로하면 app 하나로 통합됨
+    """
+    ma_list, deleted_doc_index = make_dict.document_transform(ma_list)
+    df = pd.DataFrame({'app_id': app_id_list,
+                       'app_name': app_name_list,
+                       'category': cate_list,
+                       'rating': rating_list})
+    df = df.loc[~df.index.isin(deleted_doc_index), :]
+    app_id_list = df.iloc[:, 0].values.reshape(-1).tolist()
+    app_name_list = df.iloc[:, 1].values.reshape(-1).tolist()
+    cate_list = df.iloc[:, 2].values.reshape(-1).tolist()
+    rating_list = df.iloc[:, 3].values.reshape(-1).tolist()
+
+    if by_app_id:
+        app_id_list, app_name_list, cate_list, rating_list, ma_list = \
+            make_dict.transform_by_app_id(app_id_list, app_name_list, cate_list, rating_list, ma_list)
+
+    save_jsonl(save_file_path, app_id_list, app_name_list, cate_list, rating_list, ma_list)
+
+
+def data_processing_keyword_extract(file_path, save_file_path, major_pos):
+    make_dict, app_id_list, app_name_list, cate_list, rating_list, ma_list = \
+        make_keyword_dict(file_path, major_pos, print_keywords=False, komoran_option=True, only_ma=False)
+
+    filter_docs_by_dict(make_dict, app_id_list, app_name_list, cate_list, rating_list, ma_list,
+                        save_file_path=save_file_path, by_app_id=True)
+    # save_json('./data/word_idx_json_by_app_id.txt', make_dict.word_idx)
+
+
+def ma_transform_by_spacing(ma_list):
+        documents = []
+        for doc in ma_list:
+            documents.append(' '.join(doc))
+
+        return documents
+
+
+def extract_keyword(matrix, vocab_idx, app_id_list, n_rank=10):
     """키워드 추출"""
     doc_len, word_len = matrix.shape
     vocab_inv = {v: k for k, v in vocab_idx.items()}
 
     keyword_dict = defaultdict()
-    for app_id, i in tqdm(zip(app_id_list, range(doc_len)), desc='Extracting...', total=len(app_id_list)):
-        rank_list = sorted(range(word_len), key=lambda k: matrix[i, :][k], reverse=True)
-        keyword_dict[app_id] = [vocab_inv[r] for r in rank_list[:n_rank]]
+    for i in tqdm(range(doc_len), desc='Extracting...', total=doc_len):
+        rank_list = matrix.getrow(i).toarray().reshape(-1).argsort()[::-1]
+        keyword_dict[app_id_list[i]] = [vocab_inv[r] for r in rank_list[:n_rank]]
 
     return keyword_dict
 
-def get_key_word(cate_name_path, file_path_by_app_id, app_id_list, make_dict, ma_lists):
 
-    category_list, app_name_list = get_app_name_category(cate_name_path, app_id_list)
-    _ = filter_docs_by_dict(make_dict, ma_lists, save_file_path=file_path_by_app_id, by_app_id=True)
-
-    flat_docs = make_dict.load_file(file_path_by_app_id, option_split=False)
-    tfidf_vec = TfidfVectorizer(analyzer=str.split, vocabulary=make_dict.word_idx)
-    keyword_dict = extract_key_word(tfidf_vec.fit_transform(flat_docs).toarray(), make_dict.word_idx,
-                                    app_id_list, n_rank=10)
-
-    return keyword_dict, category_list, app_name_list
-
-##
-
-def data_processing(jsonl_file_path, save_file_path, choose_pos, option_by_app_id=True):
-    """
-    jsonl_file_path: 형태소 처리된 파일 경로
-    save_file_path: flat한 document 저장경로
-    choose_pos: 원하는 형태소 선택, 하나의 리스트
-    """
-    make_dict, app_id_list, ratings_lists, ma_lists = make_keyword_dict(jsonl_file_path, choose_pos, print_keywords=False)
-    filter_docs_by_dict(make_dict, ma_lists, ratings_lists, save_file_path=save_file_path, by_app_id=option_by_app_id)
-
-    return make_dict, app_id_list
-
-def data_loading(save_file_path, make_dict):
-    flat_docs = make_dict.load_file(save_file_path[0], option_split=False)
-    flat_ratings = make_dict.load_file(save_file_path[1], option_split=True)
-
-    return flat_docs, flat_ratings
+def get_matrix(vectorizer, spaced_ma_list, ngram_range=(1, 1), mode_NB=False, test_spaced_ma_list=None):
+    vec = vectorizer(analyzer=str.split, ngram_range=ngram_range)
+    if not mode_NB:
+        coo_matrix = vec.fit_transform(spaced_ma_list)
+        words = vec.get_feature_names()
+        return coo_matrix, words, vec
+    else:
+        train_coo_matrix = vec.fit_transform(spaced_ma_list)
+        test_coo_matrix = vec.transform(test_spaced_ma_list)
+        words = vec.get_feature_names()
+        return train_coo_matrix, test_coo_matrix, words, vec
 
 
-def get_tfidf_matrix(flat_docs, make_dict):
-    tfidf_vec = TfidfVectorizer(analyzer=str.split, vocabulary=make_dict.word_idx)
-    coo_matrix = tfidf_vec.fit_transform(flat_docs)
-    words = tfidf_vec.get_feature_names()
+def get_key_word(load_file_path, vectorizer, save_keyword_path='./data/keyword_dict_by_app_id'):
+    app_id_list, app_name_list, cate_list, rating_list, ma_list = read_jsonl(load_file_path)
+    spaced_ma_list = ma_transform_by_spacing(ma_list)
+    coo_matrix, words, vec = get_matrix(vectorizer, spaced_ma_list, ngram_range=(1, 1), mode_NB=False)
+    keyword_dict = extract_keyword(coo_matrix, vec.vocabulary_, app_id_list, n_rank=10)
+    save_json(save_keyword_path, keyword_dict)
 
-    return coo_matrix, words
+    return keyword_dict, app_id_list, cate_list, app_name_list, ma_list
 
-def get_boundary(filtered_docs):
-    li = [0]
-    k = 0
-    for i in range(len(filtered_docs)):
-        k += len(filtered_docs[i])
-        li.append(k)
-
-    return li
 
 # specific rate docs analysis
-def get_app_id_dict_from_boundary(boundary, app_id_list):
-    app_id_dict = defaultdict()
-    for app_id, (b1, b2) in zip(app_id_list, zip(boundary, boundary[1:]+[None])):
-        app_id_dict[app_id] = (b1, b2)
 
-    reverse_ = {v: k for k, v in app_id_dict.items()}
+def create_specific_rate_docs(load_file_path, save_file_path, rate):
+    app_id_list, app_name_list, cate_list, rating_list, ma_list = read_jsonl(load_file_path)
+    df = pd.DataFrame({'app_id': app_id_list,
+                       'app_name': app_name_list,
+                       'category': cate_list,
+                       'rating': rating_list,
+                       'review': ma_list})
 
-    return app_id_dict, reverse_
+    df = df.loc[df.rating == str(rate), :]
+    app_id_list = df.iloc[:, 0].values.reshape(-1).tolist()
+    app_name_list = df.iloc[:, 1].values.reshape(-1).tolist()
+    cate_list = df.iloc[:, 2].values.reshape(-1).tolist()
+    rating_list = df.iloc[:, 3].values.reshape(-1).tolist()
+    ma_list = df.iloc[:, 4].values.reshape(-1).tolist()
 
-def check_isin_id(reverse_app_id_dict, i):
-    for (b1, b2), v in reverse_app_id_dict.items():
-        if (i < b2) & (i >= b1):
-            break
-    return v
+    save_jsonl(save_file_path, app_id_list, app_name_list, cate_list, rating_list, ma_list)
 
-def create_specific_rate_docs(rate, boundary, app_id_list, test_y, test_X):
-    app_id_dict, reverse_app_id_dict = get_app_id_dict_from_boundary(boundary, app_id_list)
-    mask = test_y.astype(np.int).reshape(-1) == rate
-    docs = []
-    docs_app_id = []
-    orderd_set_docs_app_id = []
-    for i in tqdm(np.arange(len(mask))[mask], desc='Creating Docs...', total=sum(mask)):
-        docs.append(test_X[i])
-        app_id = check_isin_id(reverse_app_id_dict, i)
-        docs_app_id.append(app_id)
 
-    for app_id in docs_app_id:
-        if app_id not in orderd_set_docs_app_id:
-            orderd_set_docs_app_id.append(app_id)
-
-    return docs, orderd_set_docs_app_id
-
-def main_choose_specific_rate(rate, test_y, test_X, test_boundary, test_app_id_list, option=True):
-
-    docs, docs_app_id = create_specific_rate_docs(rate, test_boundary, test_app_id_list, test_y, test_X)
+def get_specific_rate_Counter(load_file_path, vectorizer, save_keyword_path):
+    keyword_dict, app_id_list, cate_list, app_name_list, ma_list = get_key_word(load_file_path, vectorizer,
+                                                                                save_keyword_path=save_keyword_path)
     word_counter = Counter()
-    for doc in docs:
-        word_counter.update(doc.split(' '))
+    for doc in ma_list:
+        word_counter.update(doc)
 
-    word_idx = {k: i for i, k in enumerate(word_counter.keys())}
-    tfidf = TfidfVectorizer(analyzer=str.split, vocabulary=word_idx)
-    matrix = tfidf.fit_transform(docs)
-    keyword_dict = extract_key_word(matrix.toarray(), tfidf.vocabulary_, docs_app_id)
-    if option:
-        choose_pos = ["NNG", "NNP", "NP", "XR", "VV", "VA", "MAG", "MAJ"]
-    else:
-        full_morph = ['NNG', 'NNP', 'NNB', 'NR', 'NP', 'VV', 'VA', 'VX', 'VCP', 'VCN', 'MM', 'MAG', 'MAJ', 'IC']
-        empty_morph = ['JKS', 'JKC', 'JKG', 'JKO', 'JKB', 'JKV', 'JKQ', 'JX', 'JC', 'EP', 'EF', 'EC', 'ETN', 'ETM',
-                       'XPN',
-                       'XSN', 'XSV', 'XSA']
-        egun = ['XR']
-        not_koreans = ['SL', 'SH', 'SN']
-        choose_pos = full_morph + egun + not_koreans + empty_morph
+    return word_counter
 
-    total_words = list(set([w for words in keyword_dict.values() for w in words]))
-    choosen_words = [w for w in total_words if w.split('/')[1] in choose_pos]
-    choosen_words = [w+'다' if w.split('/')[1] in ['VV', 'VA'] else w for w in choosen_words ]
-    choosen_words_count = Counter({w: word_counter[w] for w in choosen_words})
 
-    return choosen_words_count
+def main_specific(n_common):
+    load_file_path = './data/docs_jsonl_ma_NB.txt'
+    save_file_path_1 = './data/docs_jsonl_ma_NB_rate1'
+    save_file_path_5 = './data/docs_jsonl_ma_NB_rate5'
 
-def main_specific(n_common, test_y, test_X, test_boundary, test_app_id_list, option=True):
+    create_specific_rate_docs(load_file_path, save_file_path_1, 1)
+    create_specific_rate_docs(load_file_path, save_file_path_5, 5)
 
-    docs5 = main_choose_specific_rate(5, test_y, test_X, test_boundary, test_app_id_list, option=option)
-    docs1 = main_choose_specific_rate(1, test_y, test_X, test_boundary, test_app_id_list, option=option)
+    docs1 = get_specific_rate_Counter(save_file_path_1, vectorizer=TfidfVectorizer, save_keyword_path='./data/keyword_doc1.txt')
+    docs5 = get_specific_rate_Counter(save_file_path_5, vectorizer=TfidfVectorizer, save_keyword_path='./data/keyword_doc5.txt')
 
     a, b = list(zip(*docs5.most_common(n_common)))
     c, d = list(zip(*docs1.most_common(n_common)))
     df = pd.DataFrame([a, b, c, d]).T
-    df.columns = ['5점 문서', 'Count', '1점문서', 'Count']
+    df.columns = ['5점 문서', 'Count_5', '1점 문서', 'Count_1']
     df.index = df.index + 1
-    table = df.loc[~df.iloc[:, 0].isin(df.iloc[:, 2]), :]
+
+    mask1 = df.iloc[:, 0].isin(df.iloc[:, 2])  # 1점 문서에 5점짜리 단어가 있는지
+    mask2 = df.iloc[:, 2].isin(df.iloc[:, 0])  # 5점 문서에 1점짜리 단어가 있는지
+    a = df.loc[~mask1, ['5점 문서', 'Count_5']].reset_index(drop=True)
+    b = df.loc[~mask2, ['1점 문서', 'Count_1']].reset_index(drop=True)
+    table = pd.concat((a, b), axis=1)
+    table.index = table.index + 1
 
     return table, df
