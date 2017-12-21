@@ -1,6 +1,8 @@
 # Exploring App Store Reiview 분석
 
-Jupyter notebook 링크: [링크](https://nbviewer.jupyter.org/github/simonjisu/app_store_reviews_analysis/blob/master/Exploring_App_Store_Reviews.ipynb)
+Explore App Store Review 링크: [링크](https://nbviewer.jupyter.org/github/simonjisu/app_store_reviews_analysis/blob/master/Exploring_App_Store_Reviews.ipynb)
+
+Gensim Clustering & Classification 링크: [링크](https://nbviewer.jupyter.org/github/simonjisu/app_store_reviews_analysis/blob/master/Gensim_Clustering%26Classification.ipynb)
 
 Slider Share 링크: [링크](https://www.slideshare.net/JisooJang/exploring-app-store-reviewsv2)
 
