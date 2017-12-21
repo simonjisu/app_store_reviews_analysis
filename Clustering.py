@@ -1,6 +1,6 @@
-from utils import read_jsonl, color_zero_white, color_red, color_blue, highlight_max_red, magnify
+from utils import read_jsonl
 from analysis import ma_transform_by_spacing, get_matrix
-from sklearn.cluster import MiniBatchKMeans, KMeans
+from sklearn.cluster import MiniBatchKMeans
 from collections import OrderedDict
 import pandas as pd
 import numpy as np

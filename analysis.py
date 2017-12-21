@@ -1,6 +1,5 @@
 from utils import *
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
 import pandas as pd
 from pprint import pprint
 
@@ -12,7 +11,7 @@ from pprint import pprint
 # signs = ['SF', 'SE', 'SS', 'SP', 'SO', 'SW']
 # not_koreans = ['SL', 'SH', 'SN']
 
-def make_keyword_dict(file_path, choose_pos, print_keywords=True, komoran_option=False, only_ma=False):
+def make_keyword_dict(file_path, choose_pos, print_keywords=True, komoran_option=False, only_ma=False, normal_dict_option=1):
     """주요 품사별로 사전 만들기"""
     if only_ma:
         app_id_list, ma_list = read_jsonl(file_path, only_ma=only_ma)
@@ -20,7 +19,7 @@ def make_keyword_dict(file_path, choose_pos, print_keywords=True, komoran_option
         app_id_list, app_name_list, cate_list, rating_list, ma_list = read_jsonl(file_path, only_ma=only_ma)
 
     make_dict = Make_dictionay(komoran_option=komoran_option)
-    make_dict.fit(ma_list, choose_pos=choose_pos, normal_dict_option=1)
+    make_dict.fit(ma_list, choose_pos=choose_pos, normal_dict_option=normal_dict_option)
     if print_keywords:
         print('최다 빈도수 단어 TOP 10')
         print('='*20)

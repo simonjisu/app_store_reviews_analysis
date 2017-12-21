@@ -45,6 +45,8 @@ class Post_ma(object):
             if len(duplicated_index) != 0:
                 print('There are duplicated rules! find you input pairs in index of {}'.format(duplicated_index))
 
+        self.load()
+
     def check_duplicate(self, ma):
         if ma in self.post_ma_pairs:
             return True
@@ -96,6 +98,15 @@ class Post_ma(object):
     # 2. NA 중에 바꾸고 싶은 단어가 있는지 확인하고 스페이싱을 한다.
     # 3. 형태소 분석을 한다.
     # 4. 분리된 형태소에서 단어를 바꿔준다.
+    def find_loc_merge(self, ma_docs, sublist):
+        loc_list = []
+        sub_len = len(sublist)
+        for idx, doc in enumerate(ma_docs):
+            check = sum([True for sub in sublist if sub in doc])
+            if check == sub_len:
+                loc_list.append(idx)
+
+        return loc_list
 
     def find_sublists(self, seq, sublist):
         length = len(sublist)
@@ -156,14 +167,17 @@ class Post_ma(object):
                 self.try_tokenizing(ma_docs[doc_loc], ma_loc)
                 self.replace_list_elem(ma_docs[doc_loc], ma_loc, after)
 
-    def merge_method(self, ma_docs, ma_set, loc_info):
+    def merge_method(self, ma_docs, ma_set, loc_list):
         """
-        앞에서 loc_dict에 key로 list를 쓸수 없기 때문에 loc_info에는 doc_loc 만 들어가게됨,
+        ma_set = ([[ma, pos], [ma, pos]], [ma, pos])
+        loc_list: ma_doc 위치
         """
-        for app_loc, doc_loc in loc_info:
-            self.replace_sublist(ma_docs[app_loc][doc_loc], ma_set[0], ma_set[1])
+        before = ma_set[0]
+        after = ma_set[1]
+        for doc_loc in tqdm(loc_list, desc='Processings', total=len(loc_list)):
+            self.replace_sublist(ma_docs[doc_loc], before, after)
 
-    def replace_ma_docs(self, ma_docs, location_dict):  ## 이미 처리했던거 기록할 필요가 있음
+    def replace_ma_docs(self, ma_docs, location_dict=None, mode_split=True):  ## 이미 처리했던거 기록할 필요가 있음
         """
         location_dict: 바꾸고 싶은 단어, 모르는 단어들의 위치(전체)
         split: {'ma': [doc_loc1, doc_loc2], 'ma2':...]
@@ -173,16 +187,18 @@ class Post_ma(object):
             print('Plead load post_ma_rules first')
             return None
 
-        for ma_set in self.post_ma_pairs:
-            if len(ma_set[0]) == 1:  # before -> after: split 일때
-                ma_key = ma_set[0][0][0]
-                loc_dict = self.get_location_dict_by_ma(ma_key, location_dict)
-                self.split_method(ma_docs, ma_set, loc_dict)
-            elif len(ma_set[0]) > 1:  # before -> after: merge 일때
-                ma_key = '/'.join([word for word in ma_set[0]])
-                self.merge_method(ma_docs, ma_set, location_dict[ma_key])
-            else:
-                print('error, no before word')
+        if mode_split:
+            for ma_set in self.post_ma_pairs:
+                if len(ma_set[0]) == 1:  # before -> after: split 일때
+                    ma_key = ma_set[0][0][0]
+                    loc_dict = self.get_location_dict_by_ma(ma_key, location_dict)
+                    self.split_method(ma_docs, ma_set, loc_dict)
+        else:
+            for ma_set in self.post_ma_pairs:
+                if len(ma_set[0]) > 1:  # before -> after: merge 일때
+                    ma_key = ma_set[0]
+                    loc_list = self.find_loc_merge(ma_docs, ma_key)
+                    self.merge_method(ma_docs, ma_set, loc_list)
 
         return ma_docs
 
